@@ -1,0 +1,252 @@
+library(Seurat)
+library(dplyr)
+library(patchwork)
+library(ggplot2)
+library(tidyverse)
+library(gridExtra)
+library(stringr)
+wt <- readRDS(file = "E:/wt.rds")
+Pjdata <- readRDS(file = "E:/Pjdata.rds") 
+Atdata <- readRDS(file = "E:/Atdata.rds")
+
+## Check what remained
+wt
+
+## Selecting cells for further analysis
+wt <- subset(wt, subset = nFeature_RNA > 100 & nFeature_RNA < 7500)
+wt
+
+## create a day list
+day <- names(wt@active.ident)
+day_detect <- ifelse(str_detect(day,"24"),"7day",ifelse(str_detect(day,"25"),"7day",
+                                                        ifelse(str_detect(day,"11"),"1day",
+                                                               "1day")))
+
+wt@meta.data$day <- day_detect
+Idents(object = wt) <- "day"
+
+##Normalizzed Data and Intergrate the two dataset
+wt.list <- SplitObject(wt, split.by = "day")
+
+## perform standard preprocessing on each object
+for (i in 1:length(wt.list)) {
+  wt.list[[i]] <- NormalizeData(wt.list[[i]], verbose = FALSE)
+  wt.list[[i]] <- subset(wt.list[[i]])
+  wt.list[[i]] <- FindVariableFeatures(
+    wt.list[[i]], selection.method = "vst",
+    nfeatures = 2000, verbose = FALSE
+  )
+}
+
+## select features that are repeatdely variable across datasets for integration run PCA on each
+features <- SelectIntegrationFeatures(object.list = wt.list)
+wt.list <- lapply(X = wt.list, FUN = function(x){
+  x <- ScaleData(x, features = features, verbose = FALSE)
+  x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+## Find anchors in two dataset
+anchors <- FindIntegrationAnchors(object.list = wt.list)
+wt <- IntegrateData(anchorset = anchors)
+
+## Normalizzed Data again
+wt <- ScaleData(wt, verbose = FALSE)
+wt <- FindVariableFeatures(wt,
+                           selection.method = "vst",
+                           nfeatures = 2000,
+                           verbose = FALSE)
+wt <- RunPCA(wt, features = VariableFeatures(object = wt), verbose = FALSE)
+
+## FindNeighbors and FindClusters
+wt <- FindNeighbors(wt, reduction = "pca", dims = 1:14)
+wt <- FindClusters(wt, resolution = 0.6)
+
+## Run UMAP
+wt <- RunUMAP(wt, dims = 1:14)
+DimPlot(wt, label = TRUE, reduction = "umap",repel = TRUE, label.size = 6)
+
+## save rds file
+saveRDS(wt, file = "E:/wt.rds")
+
+## Find cluster marker genes
+DefaultAssay(wt) <- "RNA"
+cluster0.markers <- FindConservedMarkers(wt, ident.1 = 0, grouping.var = "day", verbose = FALSE)
+head(cluster0.markers)
+write.csv(cluster0.markers,"E:/cluster0_Markergenes.csv")
+
+############################### Now we focus on Pj nuclei and re-analyze.#######################################################
+Pjnuclei <- subset(wt, idents = c("2","3","4","5","6","7"))
+pj.genes <- grep(pattern = "^Pjv1", x = rownames(wt), value = TRUE)
+pj.peptide <- grep(pattern = "^PJ", x = rownames(wt), value = TRUE)
+pj.all <- append(pj.genes, pj.peptide)
+Pjdata <- CreateSeuratObject(counts = Pjnuclei@assays$RNA[pj.all, ], min.cells = 3, min.genes = 200, project = "VASAplatewt", assay = "RNA", names.field = 1)
+
+## create a day and sample list
+day <- names(Pjdata@active.ident)
+day_detect <- ifelse(str_detect(day,"24"),"7day",ifelse(str_detect(day,"25"),"7day",
+                                                        ifelse(str_detect(day,"11"),"1day",
+                                                               "1day")))
+
+Pjdata@meta.data$day <- day_detect
+Idents(object = Pjdata) <- "day"
+
+## Normalizzed Data and Intergrate the two dataset
+Pj.list <- SplitObject(Pjdata, split.by = "day")
+
+## perform standard preprocessing on each object
+for (i in 1:length(Pj.list)) {
+  Pj.list[[i]] <- NormalizeData(Pj.list[[i]], verbose = FALSE)
+  Pj.list[[i]] <- subset(Pj.list[[i]])
+  Pj.list[[i]] <- FindVariableFeatures(
+    Pj.list[[i]], selection.method = "vst",
+    nfeatures = 2000, verbose = FALSE
+  )
+}
+
+# select features that are repeatdely variable across datasets for integration run PCA on each
+features <- SelectIntegrationFeatures(object.list = Pj.list)
+Pj.list <- lapply(X = Pj.list, FUN = function(x){
+  x <- ScaleData(x, features = features, verbose = FALSE)
+  x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+## Integrate Data Using Anchors
+## find anchors
+anchors <- FindIntegrationAnchors(object.list = Pj.list)
+Pjdata <- IntegrateData(anchorset = anchors)
+
+## Normalizzed Data again
+Pjdata <- ScaleData(Pjdata, verbose = FALSE)
+Pjdata <- FindVariableFeatures(Pjdata,
+                               selection.method = "vst",
+                               nfeatures = 2000,
+                               verbose = FALSE)
+Pjdata <- RunPCA(Pjdata, features = VariableFeatures(object = Pjdata), verbose = FALSE)
+
+## FindNeighbors and FindClusters
+Pjdata <- FindNeighbors(Pjdata, reduction = "pca", dims = 1:20)
+Pjdata <- FindClusters(Pjdata, resolution = 0.6)
+
+## Run UMAP
+Pjdata <- RunUMAP(Pjdata, dims = 1:18)
+DimPlot(Pjdata, reduction = "umap", label = TRUE, pt.size = 1.5,repel = TRUE, label.size = 6)
+
+## Save rds file
+saveRDS(Pjdata, file = "E:/Pjdata.rds")
+
+## Find cluster marker genes
+DefaultAssay(Pjdata) <- "RNA"
+cluster0.markers <- FindConservedMarkers(Pjdata, ident.1 = 0, grouping.var = "day", verbose = FALSE)
+head(cluster0.markers)
+write.csv(cluster0.markers,"E:/cluster0_Markergenes.csv")
+
+## Find differentially expressed genes across samples
+Idents(object = Pjdata) <- "day"
+sample.markers <- FindMarkers(Pjdata, ident.1 = "7day", ident.2 = "1day", logfc.threshold = 0)
+
+## view results
+head(sample.markers)
+write.csv(sample.markers,"E:/sample_Markergenes.csv")
+
+## Volcano plot of differentially expressed genes
+library(EnhancedVolcano)
+EnhancedVolcano(sample.markers, 
+                rownames(sample.markers),
+                title = "7day vs. 1day",
+                x ="avg_log2FC", 
+                y ="p_val",
+                pCutoff = 0.05,
+                FCcutoff = 0.25,
+                labSize = 4.0)
+
+## Dot plot of cluster marker genes
+Pj_markers <- c("Pjv1-G00006551","Pjv1-G00018076","Pjv1-G00002119",
+                "Pjv1-G00022987","Pjv1-G00008158","Pjv1-G00024612",
+                "Pjv1-G00017642","Pjv1-G00017935","Pjv1-G00027672",
+                "Pjv1-G00003015","Pjv1-G00015540","Pjv1-G00026484",
+                "Pjv1-G00005210","Pjv1-G00001429","Pjv1-G00020781",
+                "Pjv1-G00014632","Pjv1-G00000689","Pjv1-G00005229")
+DotPlot(Pjdata, features = Pj_markers, cols = c("blue", "red"), split.by = "day", assay = "RNA") + RotatedAxis()
+
+############################### Now we focus on At nuclei and re-analyze.#######################################################
+Atnuclei <- subset(wt, idents = c("1"))
+At.all <- grep(pattern = "^AT", x = rownames(wt), value = TRUE)
+Atdata <- CreateSeuratObject(counts = Atnuclei@assays$RNA[At.all, ], min.cells = 3, min.genes = 200, project = "VASAplatewt", assay = "RNA", names.field = 1)
+
+## create a day and sample list
+day <- names(Atdata@active.ident)
+day_detect <- ifelse(str_detect(day,"24"),"7day",ifelse(str_detect(day,"25"),"7day",
+                                                        ifelse(str_detect(day,"11"),"1day",
+                                                               "1day")))
+
+Atdata@meta.data$day <- day_detect
+Idents(object = Atdata) <- "day"
+
+## Normalizzed Data and Intergrate the two dataset
+At.list <- SplitObject(Atdata, split.by = "day")
+
+## perform standard preprocessing on each object
+for (i in 1:length(At.list)) {
+  At.list[[i]] <- NormalizeData(At.list[[i]], verbose = FALSE)
+  At.list[[i]] <- subset(At.list[[i]])
+  At.list[[i]] <- FindVariableFeatures(
+    At.list[[i]], selection.method = "vst",
+    nfeatures = 2000, verbose = FALSE
+  )
+}
+
+## select features that are repeatdely variable across datasets for integration run PCA on each
+features <- SelectIntegrationFeatures(object.list = At.list)
+At.list <- lapply(X = At.list, FUN = function(x){
+  x <- ScaleData(x, features = features, verbose = FALSE)
+  x <- RunPCA(x, features = features, verbose = FALSE)
+})
+
+## Integrate Data Using Anchors
+## find anchors
+anchors <- FindIntegrationAnchors(object.list = At.list)
+Atdata <- IntegrateData(anchorset = anchors)
+
+## Normalizzed Data again
+Atdata <- ScaleData(Atdata, verbose = FALSE)
+Atdata <- FindVariableFeatures(Atdata,
+                               selection.method = "vst",
+                               nfeatures = 2000,
+                               verbose = FALSE)
+Atdata <- RunPCA(Atdata, features = VariableFeatures(object = Atdata), verbose = FALSE)
+
+## Find neighbors and find clusters
+Atdata <- FindNeighbors(Atdata, reduction = "pca", dims = 1:20)
+Atdata <- FindClusters(Atdata, resolution = 0.8)
+
+## Run UMAP
+Atdata <- RunUMAP(Atdata, dims = 1:14)
+DimPlot(Atdata, reduction = "umap", label = TRUE, pt.size = 1.5,repel = TRUE, label.size = 6)
+
+## Save rds files
+saveRDS(Atdata, file = "E:/Atdata.rds")
+
+## Find cluster marker genes
+DefaultAssay(Atdata) <- "RNA"
+cluster0.markers <- FindConservedMarkers(Atdata, ident.1 = 0, grouping.var = "day", verbose = FALSE)
+head(cluster0.markers)
+write.csv(cluster0.markers,"E:/cluster0_Markergenes.csv")
+
+## Find differentially expressed genes
+Idents(object = Atdata) <- "day"
+sample.markers <- FindMarkers(Atdata, ident.1 = "7day", ident.2 = "1day", logfc.threshold = 0)
+
+## view results
+head(sample.markers)
+write.csv(sample.markers,"E:/sample_Markergenes.csv")
+
+## Volcano plot of differentially expressed genes
+library(EnhancedVolcano)
+EnhancedVolcano(sample.markers, 
+                rownames(sample.markers),
+                title = "7day vs. 1day",
+                x ="avg_log2FC", 
+                y ="p_val",
+                pCutoff = 0.05,
+                FCcutoff = 0.25,
+                labSize = 4.0)
